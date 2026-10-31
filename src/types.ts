@@ -687,6 +687,10 @@ export type MusicData = string;
 export interface LoadFontOpt {
     outline?: number | Outline;
     /**
+     * Character sequences to format as single glyphs.
+     */
+    ligatures?: string[];
+    /**
      * The size to load the font in (default 64).
      *
      * @since v3001.0

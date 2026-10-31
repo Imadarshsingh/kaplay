@@ -10,6 +10,8 @@ import { runes } from "../utils/runes";
 import { alignPt } from "./anchor";
 import type { FormattedChar, FormattedText } from "./draw/drawFormattedText";
 import type { CharTransform, DrawTextOpt } from "./draw/drawText";
+import { getFontLigatureMatcher } from "./fontLigatures";
+import type { Frame } from "./TexPacker";
 
 /**
  * @group Rendering
@@ -33,6 +35,12 @@ export type StyledTextInfo = {
     text: string;
 };
 
+type CompiledStyledTextInfo = StyledTextInfo & {
+    charStyleRunMap: number[];
+};
+
+const ligatureChars = new WeakSet<FormattedChar>();
+
 function applyCharTransform(fchar: FormattedChar, tr: CharTransform) {
     if (tr.font) fchar.font = tr.font;
     if (tr.stretchInPlace !== undefined) {
@@ -49,20 +57,23 @@ function applyCharTransform(fchar: FormattedChar, tr: CharTransform) {
     if (tr.scale) fchar.scale = fchar.scale.scale(vec2(tr.scale));
     if (tr.skew) fchar.skew = fchar.skew.add(vec2(tr.skew));
     if (tr.angle) fchar.angle += tr.angle;
-    if (tr.color && fchar.ch.length === 1) {
+    if (tr.color && (fchar.ch.length === 1 || ligatureChars.has(fchar))) {
         fchar.color = fchar.color.mult(tr.color);
     }
     // attention to type coercion, 0 is a valid value, only null & undefined are not
     if (tr.opacity != null) fchar.opacity *= tr.opacity;
 }
 
-export function compileStyledText(txt: any): StyledTextInfo {
+function compileStyledTextInternal(txt: any): CompiledStyledTextInfo {
     const charStyleMap = {} as Record<number, [string, string][]>;
+    const charStyleRunMap: number[] = [];
     let renderText = "";
     let styleStack: [string, string][] = [];
+    let styleRun = 0;
     let text = String(txt);
 
     const emit = (ch: string) => {
+        charStyleRunMap[renderText.length] = styleRun;
         if (styleStack.length > 0) {
             charStyleMap[renderText.length] = styleStack.slice();
         }
@@ -106,6 +117,7 @@ export function compileStyledText(txt: any): StyledTextInfo {
                 }
             }
             else styleStack.push([theTagName, tagParam]);
+            styleRun++;
             text = text.slice(m.length);
             continue;
         }
@@ -121,8 +133,14 @@ export function compileStyledText(txt: any): StyledTextInfo {
 
     return {
         charStyleMap,
+        charStyleRunMap,
         text: renderText,
     };
+}
+
+export function compileStyledText(txt: any): StyledTextInfo {
+    const { charStyleMap, text } = compileStyledTextInternal(txt);
+    return { charStyleMap, text };
 }
 
 function applyTransform(
@@ -290,6 +308,41 @@ function updateFontAtlas(font: FontData | string, ch: string) {
     }
 }
 
+function getFontFrame(font: GfxFont, ch: string): Frame | undefined {
+    const frame = font.map[ch];
+    if (frame) {
+        return frame;
+    }
+
+    const normalized = ch.normalize("NFD");
+    const equivalent = font.glyphLabels?.find(label =>
+        label.normalize("NFD") === normalized
+    );
+    return equivalent === undefined ? undefined : font.map[equivalent];
+}
+
+function getSourceSpans(
+    text: string,
+    chars: string[],
+): { start: number; end: number }[] {
+    const spans: { start: number; end: number }[] = [];
+    let sourceCursor = 0;
+
+    for (const ch of chars) {
+        const start = sourceCursor;
+        const normalized = ch.normalize("NFC");
+        while (sourceCursor < text.length) {
+            sourceCursor++;
+            if (
+                text.slice(start, sourceCursor).normalize("NFC") === normalized
+            ) break;
+        }
+        spans.push({ start, end: sourceCursor });
+    }
+
+    return spans;
+}
+
 export function formatText(opt: DrawTextOpt): FormattedText {
     if (opt.text === undefined) {
         throw new Error("formatText() requires property \"text\".");
@@ -308,8 +361,21 @@ export function formatText(opt: DrawTextOpt): FormattedText {
         };
     }
 
-    const { charStyleMap, text } = compileStyledText(opt.text + "");
+    const { charStyleMap, charStyleRunMap, text } = compileStyledTextInternal(
+        opt.text + "",
+    );
     const chars = runes(text, opt.locale);
+    const sourceSpans = getSourceSpans(text, chars);
+    const charStyles = sourceSpans.map(span => charStyleMap[span.start] ?? []);
+    const charStyleRuns = sourceSpans.map((span, index) => {
+        const run = charStyleRunMap[span.start];
+        for (let offset = span.start + 1; offset < span.end; offset++) {
+            if (charStyleRunMap[offset] !== run) {
+                return -(index + 1);
+            }
+        }
+        return run;
+    });
 
     const fontAtlas = font instanceof FontData || typeof font === "string"
         ? (() => {
@@ -319,6 +385,10 @@ export function formatText(opt: DrawTextOpt): FormattedText {
         })()
         : null;
     const defGfxFont = fontAtlas ? fontAtlas.font : font as GfxFont;
+    const ligatures = font instanceof FontData
+        ? font.ligatures
+        : defGfxFont.ligatures;
+    const ligatureMatcher = getFontLigatureMatcher(ligatures);
 
     const size = opt.size || defGfxFont.size;
     const sizeScale = size / defGfxFont.size;
@@ -333,7 +403,7 @@ export function formatText(opt: DrawTextOpt): FormattedText {
     let tw = 0;
     const lines: Array<{
         width: number;
-        chars: { ch: FormattedChar; font: GfxFont }[];
+        chars: { ch: FormattedChar; font: GfxFont; sourceLength: number }[];
     }> = [];
     let curLine: typeof lines[number]["chars"] = [];
     let cursor = 0;
@@ -343,7 +413,14 @@ export function formatText(opt: DrawTextOpt): FormattedText {
 
     // TODO: word break
     while (cursor < chars.length) {
-        let ch = chars[cursor];
+        const ligature = ligatureMatcher.match(
+            chars,
+            cursor,
+            charStyleRuns,
+            opt.locale,
+        );
+        const ch = ligature?.label ?? chars[cursor];
+        const sourceLength = ligature?.sourceLength ?? 1;
 
         // always new line on '\n'
         if (ch === "\n") {
@@ -382,8 +459,12 @@ export function formatText(opt: DrawTextOpt): FormattedText {
                 font: defaultFontValue,
                 stretchInPlace: true,
                 textCursor: cursor,
-                styles: charStyleMap[cursor] ?? [],
+                styles: charStyles[cursor],
             };
+
+            if (ligature) {
+                ligatureChars.add(theFChar as FormattedChar);
+            }
 
             applyTransform(opt.transform, theFChar as any);
             applyStyles(
@@ -421,7 +502,7 @@ export function formatText(opt: DrawTextOpt): FormattedText {
                     || typeof resolvedFont === "string")
             ) updateFontAtlas(requestedFont, ch);
 
-            let f = theFChar.frame = requestedFontData.map[ch];
+            let f = theFChar.frame = getFontFrame(requestedFontData, ch);
 
             // TODO: leave space if character not found?
             if (f) {
@@ -433,7 +514,10 @@ export function formatText(opt: DrawTextOpt): FormattedText {
                 if (opt.width && curX + charWidth > opt.width && curX > 0) {
                     // new line on last word if width exceeds
                     if (lastSpace != null) {
-                        cursor -= curLine.length - lastSpace;
+                        cursor -= curLine.slice(lastSpace).reduce(
+                            (length, entry) => length + entry.sourceLength,
+                            0,
+                        );
                         // omit trailing space
                         curLine = curLine.slice(0, lastSpace - 1);
                         curX = lastSpaceWidth;
@@ -463,6 +547,7 @@ export function formatText(opt: DrawTextOpt): FormattedText {
                 curLine.push({
                     ch: theFChar as FormattedChar,
                     font: requestedFontData,
+                    sourceLength,
                 });
 
                 if (ch === " ") {
@@ -483,7 +568,7 @@ export function formatText(opt: DrawTextOpt): FormattedText {
             }
         }
 
-        cursor++;
+        cursor += sourceLength;
     }
 
     lines.push({

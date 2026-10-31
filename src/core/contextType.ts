@@ -3704,8 +3704,9 @@ export interface KAPLAYCtx {
      * will transition to the error screen after a timeout (which is set by {@link KAPLAYOpt["loadTimeout"]|KAPLAYOpt.loadTimeout}).
      *
      * @param sprite - The ID of the sprite to use as a font. Must already have frames defined
-     * @param chars - The characters that correspond to each of the frames in the sprite. You can't use
-     * space or newline here because those are hard-coded to special behaviors in the text layout code.
+     * @param chars - A string of characters, or an ordered array of glyph labels, that correspond to
+     * each frame in the sprite. Strings cannot contain spaces or newlines. Array labels may contain
+     * spaces, but cannot contain newlines.
      *
      * @returns The generated font data.
      * @group Assets
@@ -3715,7 +3716,7 @@ export interface KAPLAYCtx {
      */
     loadBitmapFontFromSprite(
         sprite: string,
-        chars: string,
+        chars: string | string[],
     ): Asset<BitmapFontData>;
     /**
      * Load a shader with vertex and fragment code.
