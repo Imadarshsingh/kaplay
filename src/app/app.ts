@@ -92,9 +92,19 @@ export class ButtonState<T = string, A = never> {
             state.events.trigger(this._releaseEv as any, btn, this._arg);
         }
     }
+    releaseSilently(btn: T) {
+        this.down.delete(btn);
+        this.pressed.delete(btn);
+        this.pressedRepeat.delete(btn);
+    }
     releaseAll(state: AppState) {
         for (const btn of this.down) {
             this.release(btn, state);
+        }
+    }
+    releaseAllSilently() {
+        for (const btn of this.down) {
+            this.releaseSilently(btn);
         }
     }
 }
@@ -174,6 +184,18 @@ const fixedSpeeds = {
     ludicrous: 160,
 };
 
+const KEY_ALIAS: Record<KeyboardEvent["key"], Key> = {
+    "ArrowLeft": "left",
+    "ArrowRight": "right",
+    "ArrowUp": "up",
+    "ArrowDown": "down",
+    " ": "space",
+};
+
+export function normalizeKeyboardKey(key: KeyboardEvent["key"]): Key {
+    return KEY_ALIAS[key] ?? key.toLowerCase() as Key;
+}
+
 export type FixedSpeedOption = keyof typeof fixedSpeeds;
 
 /**
@@ -234,6 +256,11 @@ export const initAppState = (opt: {
         // unified input state
         gamepads: [] as KGamepad[],
         charInputted: [] as string[],
+        keyboardCapture: null as
+            | null
+            | ((event: KeyboardEvent, key: Key) => boolean),
+        keyboardInputCaptured: false,
+        keyboardInputGeneration: 0,
         isMouseMoved: false,
         lastWidth: opt.canvas.offsetWidth,
         lastHeight: opt.canvas.offsetHeight,
@@ -386,6 +413,23 @@ export const initApp = (
             window.removeEventListener(name, val as EL);
         }
         resizeObserver.disconnect();
+        state.keyboardCapture = null;
+    }
+
+    function setKeyboardCapture(
+        capture: null | ((event: KeyboardEvent, key: Key) => boolean),
+    ) {
+        state.keyboardCapture = capture;
+    }
+
+    function setKeyboardInputCaptured(captured: boolean) {
+        if (state.keyboardInputCaptured === captured) return;
+        state.keyboardInputCaptured = captured;
+        state.keyboardInputGeneration++;
+        if (captured) {
+            state.buttonHandler.releaseKeyboardSilently();
+            state.keyState.releaseAllSilently();
+        }
     }
 
     function setFixedSpeed(speed: FixedSpeedOption) {
@@ -1019,6 +1063,7 @@ export const initApp = (
     }
 
     canvasEvents.blur = () => {
+        if (state.keyboardInputCaptured) return;
         releaseHeldInputsOnFocusLoss();
     };
 
@@ -1069,15 +1114,6 @@ export const initApp = (
         state.canvas.releasePointerCapture(e.pointerId);
     };
 
-    // translate key names to kaplay keys
-    const KEY_ALIAS: Record<KeyboardEvent["key"], Key> = {
-        "ArrowLeft": "left",
-        "ArrowRight": "right",
-        "ArrowUp": "up",
-        "ArrowDown": "down",
-        " ": "space",
-    };
-
     const PREVENT_DEFAULT_KEYS = new Set<Key>([
         "left",
         "right",
@@ -1120,8 +1156,14 @@ export const initApp = (
     canvasEvents.keydown = (e) => {
         state.capsOn = e.getModifierState("CapsLock");
 
-        const k: Key = KEY_ALIAS[e.key as keyof typeof KEY_ALIAS] as Key
-            || e.key.toLowerCase();
+        const k = normalizeKeyboardKey(e.key);
+        const keyboardInputGeneration = state.keyboardInputGeneration;
+
+        if (state.keyboardCapture?.(e, k) || state.keyboardInputCaptured) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
 
         if (
             PREVENT_DEFAULT_KEYS.has(k)
@@ -1133,6 +1175,10 @@ export const initApp = (
         }
 
         state.events.onOnce("input", () => {
+            if (
+                keyboardInputGeneration !== state.keyboardInputGeneration
+                || state.keyboardInputCaptured
+            ) return;
             const code = e.code;
 
             if (k === undefined) throw new Error(`Unknown key: ${e.key}`);
@@ -1156,10 +1202,19 @@ export const initApp = (
     };
 
     canvasEvents.keyup = (e) => {
+        const k = normalizeKeyboardKey(e.key);
+        const code = e.code;
+        const keyboardInputGeneration = state.keyboardInputGeneration;
+        if (state.keyboardInputCaptured) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
         state.events.onOnce("input", () => {
-            const k: Key = KEY_ALIAS[e.key as keyof typeof KEY_ALIAS] as Key
-                || e.key.toLowerCase();
-            const code = e.code;
+            if (
+                keyboardInputGeneration !== state.keyboardInputGeneration
+                || state.keyboardInputCaptured
+            ) return;
 
             state.buttonHandler.processKeyup(k, code, state);
             state.keyState.release(k, state);
@@ -1377,6 +1432,8 @@ export const initApp = (
         setFixedSpeed,
         numFrames,
         quit,
+        setKeyboardCapture,
+        setKeyboardInputCaptured,
         isHidden,
         setFullscreen,
         isFullscreen,

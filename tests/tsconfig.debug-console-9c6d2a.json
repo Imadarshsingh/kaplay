@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": []
+  },
+  "files": [
+    "../src/.env.d.ts",
+    "./debugConsoleTypes_9c6d2a.ts"
+  ]
+}

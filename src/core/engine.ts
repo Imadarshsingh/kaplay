@@ -91,6 +91,7 @@ export const createEngine = (gopt: KAPLAYOpt) => {
     const assets = initAssets(gfx, opt, appGfx);
     const audio = initAudio();
     const game = createGame(opt.rng);
+    const gc: (() => void)[] = [];
 
     // Frame rendering
     const frameRenderer = createFrameRenderer(
@@ -101,7 +102,15 @@ export const createEngine = (gopt: KAPLAYOpt) => {
     );
 
     // Debug mode
-    const debug = createDebug(opt, app, appGfx, audio, game, frameRenderer);
+    const debug = createDebug(
+        opt,
+        app,
+        appGfx,
+        audio,
+        game,
+        frameRenderer,
+        action => gc.push(action),
+    );
 
     // Register default factories
 
@@ -149,7 +158,7 @@ export const createEngine = (gopt: KAPLAYOpt) => {
         fontCacheCanvas,
         game,
         debug,
-        gc: [] as (() => void)[],
+        gc,
         sceneScope,
         appScope,
         // Patch, k it's only avaible after running kaplay()

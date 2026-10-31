@@ -1,4 +1,4 @@
-import type { App } from "../app/app";
+import { type App, normalizeKeyboardKey } from "../app/app";
 import type { InternalAudioCtx } from "../audio/audio";
 import { LOG_MAX } from "../constants/general";
 import type { FrameRenderer } from "../core/frameRendering";
@@ -6,7 +6,20 @@ import type { Game } from "../game/game";
 import type { AppGfxCtx } from "../gfx/gfxApp";
 import { _k } from "../shared";
 import type { KAPLAYOpt } from "../types";
+import { download } from "../utils/dataURL";
+import { parseCommandLine } from "./command";
 import type { Recording } from "./record";
+
+export type DebugCommandHandler = (
+    ...args: string[]
+) => unknown | Promise<unknown>;
+
+type DebugCommand = {
+    name: string;
+    description: string;
+    parameters: { name: string; description: string }[];
+    handler: DebugCommandHandler;
+};
 
 /**
  * Available debugging message styles.
@@ -143,6 +156,20 @@ export interface Debug {
      * @since v3001.0
      */
     numObjects(): number;
+    /**
+     * Register a command for the debug console.
+     *
+     * @param name - Unique command name.
+     * @param description - Description displayed by the help command.
+     * @param parameters - Positional parameter names and descriptions.
+     * @param handler - Function called with parsed string arguments.
+     */
+    registerCommand(
+        name: string,
+        description: string,
+        parameters: Record<string, string>,
+        handler: DebugCommandHandler,
+    ): void;
 }
 
 export const createDebug = (
@@ -152,11 +179,116 @@ export const createDebug = (
     audio: InternalAudioCtx,
     game: Game,
     fr: FrameRenderer,
-): Debug => {
+    onCleanup: (action: () => void) => void,
+): Debug & { readonly consoleOpen: boolean; readonly consoleInput: string } => {
     let debugPaused = false;
+    let debugInspect = false;
+    let consoleOpen = false;
+    let consoleInput = "";
+    let focusCanvasOnKeyup = false;
+    const commands = new Map<string, DebugCommand>();
+    const inputCaptureId = "debug-console";
+    const commandInput = gopt.debug === false
+        ? null
+        : document.createElement("input");
+
+    function closeConsole(restoreFocus = true) {
+        if (!consoleOpen) return;
+        consoleOpen = false;
+        consoleInput = "";
+        game.inputCapturedBy.delete(inputCaptureId);
+        if (commandInput) {
+            commandInput.value = "";
+            if (restoreFocus) commandInput.blur();
+        }
+        if (restoreFocus) {
+            app.setKeyboardInputCaptured(false);
+            app.canvas.focus();
+        }
+    }
+
+    function openConsole() {
+        if (gopt.debug === false || !debugInspect || !commandInput) return;
+        consoleOpen = true;
+        consoleInput = "";
+        commandInput.value = "";
+        game.inputCapturedBy.add(inputCaptureId);
+        app.setKeyboardInputCaptured(true);
+        commandInput.focus({ preventScroll: true });
+    }
+
+    async function executeCommand(line: string) {
+        let tokens: string[];
+        try {
+            tokens = parseCommandLine(line);
+        } catch (error) {
+            debug.error(error instanceof Error ? error : String(error));
+            return;
+        }
+
+        if (tokens.length === 0) return;
+        const [name, ...args] = tokens;
+        const command = commands.get(name);
+        if (!command) {
+            debug.error(`Unknown command: ${name}`);
+            return;
+        }
+        if (args.length !== command.parameters.length) {
+            debug.error(
+                `${name} expects ${command.parameters.length} argument(s), received ${args.length}`,
+            );
+            return;
+        }
+
+        try {
+            await command.handler(...args);
+        } catch (error) {
+            debug.error(error instanceof Error ? error : String(error));
+        }
+    }
+
+    function registerCommand(
+        name: string,
+        description: string,
+        parameters: Record<string, string>,
+        handler: DebugCommandHandler,
+    ) {
+        if (name.length === 0 || /\s/.test(name)) {
+            throw new Error(
+                "Command names must be non-empty and contain no whitespace",
+            );
+        }
+        if (commands.has(name)) {
+            throw new Error(`Command already registered: ${name}`);
+        }
+
+        commands.set(name, {
+            name,
+            description,
+            parameters: Object.entries(parameters).map(
+                ([parameterName, parameterDescription]) => ({
+                    name: parameterName,
+                    description: parameterDescription,
+                }),
+            ),
+            handler,
+        });
+    }
 
     const debug = {
-        inspect: false,
+        get inspect() {
+            return debugInspect;
+        },
+        set inspect(value: boolean) {
+            debugInspect = value;
+            if (!value) closeConsole();
+        },
+        get consoleOpen() {
+            return consoleOpen;
+        },
+        get consoleInput() {
+            return consoleInput;
+        },
         set timeScale(timeScale: number) {
             app.state.timeScale = timeScale;
         },
@@ -197,6 +329,7 @@ export const createDebug = (
         },
         curRecording: null,
         numObjects: () => game.root.get("*", { recursive: true }).length,
+        registerCommand,
         get paused() {
             return debugPaused;
         },
@@ -209,7 +342,109 @@ export const createDebug = (
                 audio.ctx.resume();
             }
         },
-    } satisfies Debug;
+    } satisfies Debug & {
+        readonly consoleOpen: boolean;
+        readonly consoleInput: string;
+    };
+
+    registerCommand("help", "List available commands", {}, () => {
+        const entries = [...commands.values()].map(command => {
+            const parameters = command.parameters.map(parameter =>
+                `${parameter.name}: ${parameter.description}`
+            ).join(", ");
+            return `${command.name}${
+                parameters ? ` (${parameters})` : ""
+            } - ${command.description}`;
+        });
+        debug.log(entries.join("\n"));
+    });
+    registerCommand("pause", "Toggle the game pause state", {}, () => {
+        debug.paused = !debug.paused;
+    });
+    registerCommand(
+        "timescale",
+        "Set the game time scale",
+        { value: "finite non-negative time scale" },
+        (value) => {
+            const timeScale = Number(value);
+            if (
+                value.trim() === "" || !Number.isFinite(timeScale)
+                || timeScale < 0
+            ) {
+                throw new Error(
+                    "Time scale must be a finite non-negative number",
+                );
+            }
+            debug.timeScale = timeScale;
+        },
+    );
+    registerCommand("clear", "Clear the debug log", {}, () => {
+        debug.clearLog();
+    });
+    registerCommand("screenshot", "Download a screenshot", {}, () => {
+        download("kaplay-screenshot.png", app.screenshot());
+    });
+
+    if (commandInput) {
+        commandInput.type = "text";
+        commandInput.autocomplete = "off";
+        commandInput.tabIndex = -1;
+        commandInput.setAttribute("aria-hidden", "true");
+        commandInput.style.position = "fixed";
+        commandInput.style.left = "-10000px";
+        commandInput.addEventListener("input", () => {
+            consoleInput = commandInput.value;
+        });
+        commandInput.addEventListener("blur", () => {
+            if (consoleOpen) closeConsole();
+        });
+        commandInput.addEventListener("keydown", event => {
+            event.stopPropagation();
+            if (
+                normalizeKeyboardKey(event.key) === (gopt.debugKey ?? "f1")
+            ) {
+                event.preventDefault();
+                focusCanvasOnKeyup = true;
+                closeConsole(false);
+                debug.inspect = false;
+            }
+            else if (event.key === "Enter") {
+                event.preventDefault();
+                const line = commandInput.value;
+                commandInput.value = "";
+                consoleInput = "";
+                void executeCommand(line);
+            }
+            else if (event.key === "Escape") {
+                event.preventDefault();
+                focusCanvasOnKeyup = true;
+                closeConsole(false);
+            }
+        });
+        commandInput.addEventListener("keyup", event => {
+            event.stopPropagation();
+            if (!focusCanvasOnKeyup) return;
+            event.preventDefault();
+            focusCanvasOnKeyup = false;
+            app.setKeyboardInputCaptured(false);
+            commandInput.blur();
+            app.canvas.focus();
+        });
+        document.body.appendChild(commandInput);
+
+        app.setKeyboardCapture((_event, key) => {
+            if (key !== "/" || !debugInspect) return false;
+            openConsole();
+            return true;
+        });
+
+        onCleanup(() => {
+            closeConsole();
+            app.setKeyboardInputCaptured(false);
+            app.setKeyboardCapture(null);
+            commandInput.remove();
+        });
+    }
 
     return debug;
 };

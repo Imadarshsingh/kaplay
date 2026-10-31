@@ -240,6 +240,34 @@ Batches: ${batches}`,
             popTransform();
         });
     }
+
+    if (_k.debug.consoleOpen) {
+        drawUnscaled(() => {
+            const pad = 8;
+            const prompt = formatText({
+                text: `> ${escapeStyledText(_k.debug.consoleInput)}`,
+                font: DBG_FONT,
+                pos: vec2(pad),
+                size: 16,
+                width: width() - pad * 2,
+                fixed: true,
+                color: rgb(255, 255, 255),
+            });
+
+            drawRect({
+                width: width(),
+                height: prompt.height + pad * 2,
+                color: rgb(0, 0, 0),
+                opacity: 0.9,
+                fixed: true,
+            });
+            drawFormattedText(prompt);
+        });
+    }
+}
+
+function escapeStyledText(text: string): string {
+    return text.replaceAll("\\", "\\\\").replaceAll("[", "\\[");
 }
 
 function prettyDebug(

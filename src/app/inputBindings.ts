@@ -195,6 +195,17 @@ export class ButtonProcessor {
             }
         }
     }
+    private _releaseKeyboardSilently(buttons: string[]) {
+        for (let button of buttons) {
+            if (
+                this.state.down.has(button)
+                && !this.byMouse.isButtonUsed(button)
+                && !this.byGamepad.isButtonUsed(button)
+            ) {
+                this.state.releaseSilently(button);
+            }
+        }
+    }
     processKeydown(key: Key, keyCode: string, state: AppState) {
         this._maybePress(this.byKey.handleDown(key), state);
         this._maybePress(this.byKeyCode.handleDown(keyCode), state);
@@ -224,6 +235,12 @@ export class ButtonProcessor {
             ],
             state,
         );
+    }
+    releaseKeyboardSilently() {
+        this._releaseKeyboardSilently([
+            ...this.byKey.releaseAll(),
+            ...this.byKeyCode.releaseAll(),
+        ]);
     }
     update() {
         this.state.update();
