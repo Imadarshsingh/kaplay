@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "target": "esnext",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "types": [
+      "./.env.d.ts",
+      "../src/.env.d.ts"
+    ]
+  },
+  "include": [
+    "./types/querySubscription.82c93d.ts"
+  ]
+}

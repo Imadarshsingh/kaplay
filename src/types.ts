@@ -9,6 +9,7 @@ import type {
     BroadPhaseType,
     NarrowPhaseType,
 } from "./ecs/systems/createCollisionSystem";
+import type { KEventController } from "./events/events";
 import type { LineCap, LineJoin } from "./gfx/draw/drawLine";
 import type { Picture } from "./gfx/draw/drawPicture";
 import type { FrameBuffer } from "./gfx/FrameBuffer";
@@ -642,6 +643,26 @@ export type QueryOpt = {
      */
     name?: string;
 };
+
+/**
+ * A live query whose contents are owned by its creating context or game
+ * object.
+ *
+ * @group Game Obj
+ * @subgroup Types
+ */
+export interface QuerySubscription<T = any> {
+    /** The current objects matching the query. */
+    readonly objects: readonly GameObj<T>[];
+    /** Whether this subscription has been cancelled. */
+    readonly cancelled: boolean;
+    /** Register an action for objects entering the query. */
+    onAdd(action: (obj: GameObj<T>) => void): KEventController;
+    /** Register an action for objects leaving the query. */
+    onRemove(action: (obj: GameObj<T>) => void): KEventController;
+    /** Stop updating this subscription. */
+    cancel(): void;
+}
 
 /**
  * Sprite animation configuration when playing.

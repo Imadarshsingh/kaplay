@@ -87,6 +87,10 @@ import { KeepFlags } from "../ecs/entity/GameObjRaw";
 import { createPrefab, loadPrefab } from "../ecs/entity/prefab";
 import { addKaboom } from "../ecs/entity/premade/addKaboom";
 import { addLevel } from "../ecs/entity/premade/addLevel";
+import {
+    createLiveQuerySubscription,
+    getObjectsWithLifetime,
+} from "../ecs/entity/query";
 import { destroy, exists, getTreeRoot } from "../ecs/entity/utils";
 import { Collision } from "../ecs/systems/Collision";
 import { system, SystemPhase } from "../ecs/systems/systems";
@@ -235,7 +239,14 @@ import { chance, rand, randi, randSeed, RNG, setRNG } from "../math/random";
 import { insertionSort } from "../math/sort";
 import { makeQuadtree, Quadtree } from "../math/spatial/quadtree";
 import { Vec2 } from "../math/Vec2";
-import { BlendMode, type KAPLAYPlugin } from "../types";
+import {
+    BlendMode,
+    type GameObj,
+    type GetOpt,
+    type KAPLAYPlugin,
+    type QueryOpt,
+    type Tag,
+} from "../types";
 import {
     download,
     downloadBlob,
@@ -260,11 +271,18 @@ export const createContext = (
     const addPrefab = game.root.addPrefab.bind(game.root);
     const readd = game.root.readd.bind(game.root);
     const destroyAll = game.root.removeAll.bind(game.root);
-    const get = game.root.get.bind(game.root);
+    const get = <T = any>(tag: Tag | Tag[], opts?: GetOpt) =>
+        getObjectsWithLifetime<T>(game.root, tag, opts, "context");
     const wait = game.root.wait.bind(game.root);
     const nextFrame = game.root.nextFrame.bind(game.root);
     const loop = game.root.loop.bind(game.root);
     const query = game.root.query.bind(game.root);
+    const watchQuery = <T = any>(opt: QueryOpt) =>
+        createLiveQuerySubscription(
+            game.root,
+            () => game.root.query(opt) as GameObj<T>[],
+            "context",
+        );
     const tween = game.root.tween.bind(game.root);
 
     const defaultScope = globalOpt.defaultLifetimeScope == "app"
@@ -364,6 +382,7 @@ export const createContext = (
         destroyAll,
         get,
         query,
+        watchQuery,
         readd,
         retrieve: (...args) => game.retrieve(...args),
         // comps

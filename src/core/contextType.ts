@@ -188,6 +188,7 @@ import {
     type MouseButton,
     type MusicData,
     type QueryOpt,
+    type QuerySubscription,
     type RNGValue,
     type Shape,
     type Tag,
@@ -451,6 +452,13 @@ export interface KAPLAYCtx {
      * @group Game Obj
      */
     query(opt: QueryOpt): GameObj[];
+    /**
+     * Watch a query and keep its result up to date until the current scene
+     * changes.
+     *
+     * @since v4000.0
+     */
+    watchQuery<T = any>(opt: QueryOpt): QuerySubscription<T>;
     /**
      * Checks whether the game obj is a valid object.
      *

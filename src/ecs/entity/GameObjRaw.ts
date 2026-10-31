@@ -36,6 +36,7 @@ import type {
     GameObjInspect,
     GetOpt,
     QueryOpt,
+    QuerySubscription,
     RenderTarget,
     Tag,
 } from "../../types";
@@ -49,6 +50,13 @@ import type { SkewComp } from "../components/transform/skew";
 import type { ZComp } from "../components/transform/z";
 import { internalIsMaking, make } from "./make";
 import { deserializePrefabAsset, type SerializedGameObj } from "./prefab";
+import {
+    cancelQuerySubscriptionsOwnedBy,
+    createLiveQuerySubscription,
+    getObjects,
+    notifyQuerySubscriptions,
+    updateQuerySubscriptions,
+} from "./query";
 import { isFixed } from "./utils";
 
 export enum KeepFlags {
@@ -247,6 +255,12 @@ export interface GameObjRaw {
      * @since v3001.0
      */
     query(opt: QueryOpt): GameObj[];
+    /**
+     * Watch a query and keep its result up to date.
+     *
+     * @since v4000.0
+     */
+    watchQuery<T = any>(opt: QueryOpt): QuerySubscription<T>;
     /**
      * Update this game object and all children game objects.
      *
@@ -510,7 +524,7 @@ export interface GameObjRaw {
 
 export type InternalGameObjRaw = GameObjRaw & {
     /** @readonly */
-    _parent: GameObj;
+    _parent: GameObj | null;
     /** @readonly */
     _compsIds: Set<string>;
     /** @readonly */
@@ -619,7 +633,7 @@ export const GameObjRawPrototype: Omit<
     target: null as any,
 
     // #region Setters and Getters
-    set parent(p: GameObj) {
+    set parent(p: GameObj | null) {
         // We assume this will never be ran in root
         // so this is GameObj
 
@@ -632,13 +646,14 @@ export const GameObjRawPrototype: Omit<
             ? this._parent.children.indexOf(this as unknown as GameObj)
             : -1;
         if (index !== -1) {
-            this._parent.children.splice(index, 1);
+            this._parent!.children.splice(index, 1);
         }
         this._parent = p;
         if (p) {
             p.children.push(this as unknown as GameObj);
             this._transformVersion = nextTransformVersion();
         }
+        notifyQuerySubscriptions();
     },
 
     paused: false,
@@ -660,7 +675,7 @@ export const GameObjRawPrototype: Omit<
         opt: SetParentOpt,
     ) {
         if (this._parent === p) return;
-        const oldTransform = this._parent?.transform;
+        const oldTransform = this._parent?.transform ?? new Mat23();
         const newTransform = p.transform;
         if ((opt.keep & KeepFlags.Pos) && this.pos !== undefined) {
             oldTransform.transformPointV(this.pos, this.pos);
@@ -694,7 +709,13 @@ export const GameObjRawPrototype: Omit<
             );
         }
 
-        obj.parent = this;
+        // A newly created object enters queries after its add lifecycle has
+        // run. Re-parenting existing objects still goes through the public
+        // parent setter below.
+        const internalObj = obj as unknown as InternalGameObjRaw;
+        internalObj._parent = this as unknown as GameObj;
+        this.children.push(obj);
+        internalObj._transformVersion = nextTransformVersion();
 
         calcTransform(obj, obj.transform);
 
@@ -704,6 +725,7 @@ export const GameObjRawPrototype: Omit<
         // and trigger onUse()
         _k.game.gameObjEvents.trigger("add", obj);
         obj.trigger("add", obj);
+        notifyQuerySubscriptions();
 
         return obj;
     },
@@ -787,6 +809,7 @@ export const GameObjRawPrototype: Omit<
     },
 
     remove(this: InternalGameObjRaw, obj: GameObj): void {
+        cancelQuerySubscriptionsOwnedBy(obj);
         obj.parent = null;
 
         const trigger = (o: GameObj) => {
@@ -833,101 +856,16 @@ export const GameObjRawPrototype: Omit<
         t: Tag | Tag[],
         opts: GetOpt = {},
     ): GameObj<T>[] {
-        const compIdAreTags = _k.globalOpt.tagComponentIds;
-
-        const checkTagsOrComps = (child: GameObj, t: Tag | Tag[]) => {
-            if (opts.only === "comps") {
-                return child.has(t);
-            }
-            else if (opts.only === "tags") {
-                return child.is(t);
-            }
-            else {
-                return child.is(t) || child.has(t);
-            }
-        };
-
-        let list: GameObj[] = opts.recursive
-            ? this.children.flatMap(
-                function recurse(child: GameObj): GameObj[] {
-                    return [child, ...child.children.flatMap(recurse)];
-                },
-            )
-            : this.children;
-
-        list = list.filter((child) => t ? checkTagsOrComps(child, t) : true);
-
         if (opts.liveUpdate) {
-            const isChild = (obj: GameObj) => {
-                return opts.recursive
-                    ? this.isAncestorOf(obj)
-                    : obj.parent === this;
-            };
-
-            const events: KEventController[] = [];
-
-            // TODO: clean up when obj destroyed
-            events.push(_k.sceneScope.onAdd((obj) => {
-                if (isChild(obj) && checkTagsOrComps(obj, t)) {
-                    list.push(obj);
-                }
-            }));
-            events.push(_k.sceneScope.onDestroy((obj) => {
-                if (checkTagsOrComps(obj, t)) {
-                    const idx = list.findIndex((o) => o.id === obj.id);
-                    if (idx !== -1) {
-                        list.splice(idx, 1);
-                    }
-                }
-            }));
-            // If tags are components, we need to use these callbacks, whether watching tags or components
-            // If tags are not components, we only need to use these callbacks if this query looks at components
-            if (compIdAreTags || opts.only !== "tags") {
-                events.push(_k.sceneScope.onUse((obj, id) => {
-                    if (isChild(obj) && checkTagsOrComps(obj, t)) {
-                        const idx = list.findIndex((o) => o.id === obj.id);
-                        if (idx == -1) {
-                            list.push(obj);
-                        }
-                    }
-                }));
-                events.push(_k.sceneScope.onUnuse((obj, id) => {
-                    if (isChild(obj) && !checkTagsOrComps(obj, t)) {
-                        const idx = list.findIndex((o) => o.id === obj.id);
-                        if (idx !== -1) {
-                            list.splice(idx, 1);
-                        }
-                    }
-                }));
-            }
-            // If tags are components, we don't need to use these callbacks
-            // If tags are not components, we only need to use these callbacks if this query looks at tags
-            if (!compIdAreTags && opts.only !== "comps") {
-                events.push(_k.sceneScope.onTag((obj, tag) => {
-                    if (isChild(obj) && checkTagsOrComps(obj, t)) {
-                        const idx = list.findIndex((o) => o.id === obj.id);
-                        if (idx == -1) {
-                            list.push(obj);
-                        }
-                    }
-                }));
-                events.push(_k.sceneScope.onUntag((obj, tag) => {
-                    if (isChild(obj) && !checkTagsOrComps(obj, t)) {
-                        const idx = list.findIndex((o) => o.id === obj.id);
-                        if (idx !== -1) {
-                            list.splice(idx, 1);
-                        }
-                    }
-                }));
-            }
-            this.onDestroy(() => {
-                for (const ev of events) {
-                    ev.cancel();
-                }
-            });
+            const subscription = createLiveQuerySubscription(
+                this,
+                () => getObjects(this, t, opts),
+                "object",
+            );
+            return subscription.objects as GameObj<T>[];
         }
 
-        return list as GameObj<T>[];
+        return getObjects<T>(this, t, opts);
     },
 
     query(this: GameObjTransform, opt: QueryOpt) {
@@ -938,7 +876,7 @@ export const GameObjRawPrototype: Omit<
 
         switch (hierarchy) {
             case "children":
-                list = this.children;
+                list = this.children.slice();
                 break;
             case "siblings":
                 list = this.parent
@@ -980,8 +918,8 @@ export const GameObjRawPrototype: Omit<
         }
 
         if (exclude) {
-            const excludeOp = opt.includeOp || "and";
-            if (excludeOp === "and" || !Array.isArray(opt.include)) {
+            const excludeOp = opt.excludeOp || "and";
+            if (excludeOp === "and" || !Array.isArray(opt.exclude)) {
                 // Reject if all match
                 list = list.filter(o => !o.is(exclude));
             }
@@ -1019,6 +957,13 @@ export const GameObjRawPrototype: Omit<
         }
         return list;
     },
+    watchQuery<T = any>(this: InternalGameObjRaw, opt: QueryOpt) {
+        return createLiveQuerySubscription(
+            this,
+            () => this.query(opt) as GameObj<T>[],
+            "object",
+        );
+    },
     // #endregion
 
     // #region Lifecycle
@@ -1033,6 +978,7 @@ export const GameObjRawPrototype: Omit<
         for (let i = 0; i < children.length; i++) {
             children[i].update();
         }
+        if (this.id === 0) updateQuerySubscriptions();
     },
 
     fixedUpdate(this: InternalGameObjRaw) {
@@ -1042,6 +988,7 @@ export const GameObjRawPrototype: Omit<
         for (let i = 0; i < children.length; i++) {
             children[i].fixedUpdate();
         }
+        if (this.id === 0) updateQuerySubscriptions();
     },
 
     draw(this: InternalGameObjRaw) {
@@ -1458,6 +1405,7 @@ export const GameObjRawPrototype: Omit<
 
         this._addComp(comp);
         this._checkDependencies(comp);
+        notifyQuerySubscriptions();
     },
 
     // Remove components
@@ -1466,6 +1414,7 @@ export const GameObjRawPrototype: Omit<
 
         this._removeComp(id);
         this._checkDependents(id);
+        notifyQuerySubscriptions();
     },
 
     has(
@@ -1501,6 +1450,7 @@ export const GameObjRawPrototype: Omit<
                     this.trigger("tag", t);
                     _k.game.gameObjEvents.trigger("tag", this as GameObj, t);
                 }
+                notifyQuerySubscriptions();
             }
         }
         else {
@@ -1509,6 +1459,7 @@ export const GameObjRawPrototype: Omit<
                 this.trigger("tag", tag);
                 _k.game.gameObjEvents.trigger("tag", this as GameObj, tag);
             }
+            notifyQuerySubscriptions();
         }
     },
 
@@ -1518,12 +1469,14 @@ export const GameObjRawPrototype: Omit<
                 this._tags.delete(t);
                 this.trigger("untag", t);
                 _k.game.gameObjEvents.trigger("untag", this, t);
+                notifyQuerySubscriptions();
             }
         }
         else {
             this._tags.delete(tag);
             this.trigger("untag", tag);
             _k.game.gameObjEvents.trigger("untag", this, tag);
+            notifyQuerySubscriptions();
         }
     },
 
