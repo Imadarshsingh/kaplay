@@ -7,7 +7,7 @@ import type { Texture } from "../../../gfx/gfx";
 import type { Color } from "../../../math/color";
 import { Polygon } from "../../../math/math";
 import { type Vec2 } from "../../../math/Vec2";
-import type { Comp, GameObj } from "../../../types";
+import type { Comp, GameObj, TextureSource } from "../../../types";
 import { nextRenderAreaVersion } from "../physics/area";
 import type { FillComp } from "./fill";
 
@@ -48,6 +48,10 @@ export interface PolygonComp extends Comp {
      * @since v3001.0
      */
     tex?: Texture;
+    /** The sprite used to texture the polygon. */
+    texture?: TextureSource;
+    /** The sprite frame used to texture the polygon. */
+    frame: number;
     renderArea(): Polygon;
 }
 
@@ -75,6 +79,8 @@ export function polygon(
         opacities: opt.opacities,
         uv: opt.uv,
         tex: opt.tex,
+        texture: opt.texture,
+        frame: opt.frame ?? 0,
         radius: opt.radius,
         draw(this: GameObj<PolygonComp & FillComp>) {
             drawPolygon(Object.assign(getRenderProps(this), {
@@ -83,6 +89,8 @@ export function polygon(
                 opacities: this.opacities,
                 uv: this.uv,
                 tex: this.tex,
+                texture: this.texture,
+                frame: this.frame,
                 radius: this.radius,
                 fill: this.fill ?? opt.fill,
                 triangulate: opt.triangulate,

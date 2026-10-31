@@ -2,7 +2,12 @@ import { getRenderProps } from "../../../game/utils";
 import { drawCircle } from "../../../gfx/draw/drawCircle";
 import { Circle, Rect } from "../../../math/math";
 import { Vec2 } from "../../../math/Vec2";
-import type { Comp, GameObj } from "../../../types";
+import type {
+    Comp,
+    GameObj,
+    TextureProps,
+    TextureSource,
+} from "../../../types";
 import { nextRenderAreaVersion } from "../physics/area";
 import type { AnchorComp } from "../transform/anchor";
 import type { FillComp } from "./fill";
@@ -17,6 +22,8 @@ import type { outline } from "./outline";
 export interface SerializedCircleComp {
     radius: number;
     fill?: boolean;
+    texture?: string;
+    frame?: number;
 }
 
 /**
@@ -29,6 +36,10 @@ export interface CircleComp extends Comp {
     draw: Comp["draw"];
     /** Radius of circle. */
     radius: number;
+    /** The sprite used to texture the circle. */
+    texture?: TextureSource;
+    /** The sprite frame used to texture the circle. */
+    frame: number;
     /**
      * Render area of the circle.
      *
@@ -44,7 +55,7 @@ export interface CircleComp extends Comp {
  * @group Components
  * @subgroup Component Types
  */
-export interface CircleCompOpt {
+export interface CircleCompOpt extends TextureProps {
     /**
      * If fill the circle (useful if you only want to render outline with
      * {@link outline `outline()`} component).
@@ -70,10 +81,14 @@ export function circle(
                 this._renderAreaVersion = nextRenderAreaVersion();
             }
         },
+        texture: opt.texture,
+        frame: opt.frame ?? 0,
         draw(this: GameObj<CircleComp & FillComp>) {
             drawCircle(Object.assign(getRenderProps(this), {
                 radius: _radius,
                 fill: this.fill ?? opt.fill,
+                texture: this.texture,
+                frame: this.frame,
             }));
         },
         renderArea(
@@ -97,6 +112,10 @@ export function circle(
         serialize(this: GameObj<CircleComp & FillComp>) {
             const data: SerializedCircleComp = { radius: _radius };
             if (this.fill ?? opt.fill) data.fill = true;
+            if (typeof this.texture === "string") {
+                data.texture = this.texture;
+                if (this.frame !== undefined) data.frame = this.frame;
+            }
             return data;
         },
     };
@@ -105,6 +124,10 @@ export function circle(
 export function circleFactory(data: SerializedCircleComp) {
     const opt: CircleCompOpt = {};
     if (data.fill) opt.fill = data.fill;
+    if (data.texture) {
+        opt.texture = data.texture;
+        opt.frame = data.frame;
+    }
     return circle(
         data.radius,
         opt,

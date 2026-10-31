@@ -23,7 +23,10 @@ import type { BlendComp } from "../ecs/components/draw/blend";
 import type { CircleComp, CircleCompOpt } from "../ecs/components/draw/circle";
 import type { ColorComp } from "../ecs/components/draw/color";
 import type { DrawonComp, DrawonCompOpt } from "../ecs/components/draw/drawon";
-import type { EllipseComp } from "../ecs/components/draw/ellipse";
+import type {
+    EllipseComp,
+    EllipseCompOpt,
+} from "../ecs/components/draw/ellipse";
 import type { FillComp } from "../ecs/components/draw/fill";
 import type { MaskComp } from "../ecs/components/draw/mask";
 import type { OpacityComp } from "../ecs/components/draw/opacity";
@@ -190,6 +193,7 @@ import {
     type QueryOpt,
     type RNGValue,
     type Shape,
+    type StrokeTextureProps,
     type Tag,
 } from "../types";
 import type { TupleWithoutFirst } from "../utils/types";
@@ -1022,7 +1026,11 @@ export interface KAPLAYCtx {
      * @group Components
      * @subgroup Rendering
      */
-    ellipse(radiusX: number, radiusY: number): EllipseComp;
+    ellipse(
+        radiusX: number,
+        radiusY: number,
+        opt?: EllipseCompOpt,
+    ): EllipseComp;
     /**
      * Attach and render a UV quad to a Game Object.
      *
@@ -1190,6 +1198,7 @@ export interface KAPLAYCtx {
      * @param join - -The line join style.
      * @param miterLimit - The miter limit ratio.
      * @param cap -The line cap style.
+     * @param texture - Texture and frame options for the outline.
      *
      * @example
      * ```js
@@ -1213,6 +1222,7 @@ export interface KAPLAYCtx {
         join?: LineJoin,
         miterLimit?: number,
         cap?: LineCap,
+        texture?: StrokeTextureProps,
     ): OutlineComp;
     /**
      * Attach a particle emitter to a Game Object.

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": []
+  },
+  "files": [
+    "../src/.env.d.ts",
+    "./texturedShapesTypes_a71c9e.ts"
+  ],
+  "include": []
+}

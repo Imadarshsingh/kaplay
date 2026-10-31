@@ -1,7 +1,12 @@
 import { getRenderProps } from "../../../game/utils";
 import { drawRect } from "../../../gfx/draw/drawRect";
 import { Rect, vec2 } from "../../../math/math";
-import type { Comp, GameObj } from "../../../types";
+import type {
+    Comp,
+    GameObj,
+    TextureProps,
+    TextureSource,
+} from "../../../types";
 import { nextRenderAreaVersion } from "../physics/area";
 import type { FillComp } from "./fill";
 /**
@@ -15,6 +20,8 @@ export interface SerializedRectComp {
     height: number;
     radius?: number | [number, number, number, number];
     fill?: boolean;
+    texture?: string;
+    frame?: number;
 }
 
 /**
@@ -37,6 +44,10 @@ export interface RectComp extends Comp {
      * The radius of each corner.
      */
     radius?: number | [number, number, number, number];
+    /** The sprite used to texture the rectangle. */
+    texture?: TextureSource;
+    /** The sprite frame used to texture the rectangle. */
+    frame: number;
     /**
      * @since v3000.0
      */
@@ -50,7 +61,7 @@ export interface RectComp extends Comp {
  * @group Components
  * @subgroup Component Types
  */
-export interface RectCompOpt {
+export interface RectCompOpt extends TextureProps {
     /**
      * Radius of the rectangle corners.
      */
@@ -92,12 +103,16 @@ export function rect(
             }
         },
         radius: opt.radius || 0,
+        texture: opt.texture,
+        frame: opt.frame ?? 0,
         draw(this: GameObj<RectComp & FillComp>) {
             drawRect(Object.assign(getRenderProps(this), {
                 width: _width,
                 height: _height,
                 radius: this.radius,
                 fill: this.fill ?? opt.fill,
+                texture: this.texture,
+                frame: this.frame,
             }));
         },
         renderArea() {
@@ -115,6 +130,10 @@ export function rect(
             const data: SerializedRectComp = { width: _width, height: _height };
             if (this.radius) data.radius = this.radius;
             if (this.fill ?? opt.fill) data.fill = opt.fill;
+            if (typeof this.texture === "string") {
+                data.texture = this.texture;
+                if (this.frame !== undefined) data.frame = this.frame;
+            }
             return data;
         },
     };
@@ -124,6 +143,10 @@ export function rectFactory(data: SerializedRectComp) {
     const opt: RectCompOpt = {};
     if (data.radius) opt.radius = data.radius;
     if (data.fill) opt.fill = data.fill;
+    if (data.texture) {
+        opt.texture = data.texture;
+        opt.frame = data.frame;
+    }
 
     return rect(
         data.width,

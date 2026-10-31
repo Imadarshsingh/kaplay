@@ -1,6 +1,6 @@
 import type { LineCap, LineJoin } from "../../../gfx/draw/drawLine";
 import { Color, rgb, type SerializedColor } from "../../../math/color";
-import type { Comp, Outline } from "../../../types";
+import type { Comp, Outline, StrokeTextureProps } from "../../../types";
 
 /**
  * The serialized {@link outline `outline()`} component.
@@ -16,6 +16,8 @@ export interface SerializedOutlineComp {
         join: LineJoin;
         miterLimit: number;
         cap: LineCap;
+        texture?: string;
+        frame?: number;
     };
 }
 
@@ -26,7 +28,7 @@ export interface SerializedOutlineComp {
  * @subgroup Component Types
  */
 export interface OutlineComp extends Comp {
-    outline: Outline;
+    outline: Outline & { frame: number };
     serialize(): SerializedOutlineComp;
 }
 
@@ -37,6 +39,7 @@ export function outline(
     join: LineJoin = "miter",
     miterLimit: number = 10,
     cap: LineCap = "butt",
+    texture: StrokeTextureProps = {},
 ): OutlineComp {
     return {
         id: "outline",
@@ -47,12 +50,15 @@ export function outline(
             join,
             miterLimit,
             cap,
+            texture: texture.texture,
+            frame: texture.frame ?? 0,
+            textureMapping: texture.textureMapping,
         },
         inspect() {
             return `outline: ${this.outline.width}px, ${this.outline.color}`;
         },
         serialize() {
-            return {
+            const data: SerializedOutlineComp = {
                 outline: {
                     width: this.outline.width ?? 1,
                     color: {
@@ -66,6 +72,13 @@ export function outline(
                     cap: this.outline.cap ?? "butt",
                 },
             };
+            if (typeof this.outline.texture === "string") {
+                data.outline.texture = this.outline.texture;
+                if (this.outline.frame !== undefined) {
+                    data.outline.frame = this.outline.frame;
+                }
+            }
+            return data;
         },
     };
 }
@@ -78,5 +91,9 @@ export function outlineFactory(data: SerializedOutlineComp) {
         data.outline.join,
         data.outline.miterLimit,
         data.outline.cap,
+        {
+            texture: data.outline.texture,
+            frame: data.outline.frame,
+        },
     );
 }

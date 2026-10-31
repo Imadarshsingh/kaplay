@@ -1,7 +1,7 @@
 import type { Color } from "../../math/color";
 import { getArcPts } from "../../math/various";
 import { Vec2 } from "../../math/Vec2";
-import type { Anchor, RenderProps } from "../../types";
+import type { Anchor, RenderProps, TextureProps } from "../../types";
 import { anchorPt } from "../anchor";
 import { drawPolygon } from "./drawPolygon";
 
@@ -11,7 +11,7 @@ import { drawPolygon } from "./drawPolygon";
  * @group Draw
  * @subgroup Types
  */
-export type DrawEllipseOpt = RenderProps & {
+export type DrawEllipseOpt = RenderProps & TextureProps & {
     /**
      * The horizontal radius.
      */

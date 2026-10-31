@@ -2,7 +2,12 @@ import { getRenderProps } from "../../../game/utils";
 import { drawEllipse } from "../../../gfx/draw/drawEllipse";
 import { Ellipse } from "../../../math/math";
 import { Vec2 } from "../../../math/Vec2";
-import type { Comp, GameObj } from "../../../types";
+import type {
+    Comp,
+    GameObj,
+    TextureProps,
+    TextureSource,
+} from "../../../types";
 import { nextRenderAreaVersion } from "../physics/area";
 import type { AnchorComp } from "../transform/anchor";
 import type { FillComp } from "./fill";
@@ -18,6 +23,8 @@ export interface SerializedEllipseComp {
     radiusX: number;
     radiusY: number;
     fill?: boolean;
+    texture?: string;
+    frame?: number;
 }
 
 /**
@@ -32,6 +39,10 @@ export interface EllipseComp extends Comp {
     radiusX: number;
     /** Semi-minor axis of ellipse. */
     radiusY: number;
+    /** The sprite used to texture the ellipse. */
+    texture?: TextureSource;
+    /** The sprite frame used to texture the ellipse. */
+    frame: number;
     /**
      * Render area of the ellipse.
      */
@@ -45,7 +56,7 @@ export interface EllipseComp extends Comp {
  * @group Components
  * @subgroup Component Types
  */
-export interface EllipseCompOpt {
+export interface EllipseCompOpt extends TextureProps {
     /**
      * If fill is false, the ellipse is not filled (useful if you only want to render outline with
      * {@link outline `outline()`} component).
@@ -83,11 +94,15 @@ export function ellipse(
                 this._renderAreaVersion = nextRenderAreaVersion();
             }
         },
+        texture: opt.texture,
+        frame: opt.frame ?? 0,
         draw(this: GameObj<EllipseComp | FillComp>) {
             drawEllipse(Object.assign(getRenderProps(this), {
                 radiusX: this.radiusX,
                 radiusY: this.radiusY,
                 fill: this.fill ?? opt.fill,
+                texture: this.texture,
+                frame: this.frame,
             }));
         },
         renderArea(
@@ -112,11 +127,16 @@ export function ellipse(
             }`;
         },
         serialize(this: GameObj<EllipseComp | FillComp>) {
-            return {
+            const data: SerializedEllipseComp = {
                 radiusX: this.radiusX,
                 radiusY: this.radiusY,
                 fill: this.fill ?? opt.fill,
             };
+            if (typeof this.texture === "string") {
+                data.texture = this.texture;
+                if (this.frame !== undefined) data.frame = this.frame;
+            }
+            return data;
         },
     };
 }
@@ -125,6 +145,10 @@ export function ellipseFactory(data: SerializedEllipseComp) {
     const opt: EllipseCompOpt = {};
 
     if (data.fill) opt.fill = data.fill;
+    if (data.texture) {
+        opt.texture = data.texture;
+        opt.frame = data.frame;
+    }
 
     return ellipse(data.radiusX, data.radiusY, opt);
 }

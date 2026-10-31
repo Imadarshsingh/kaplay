@@ -2,6 +2,7 @@ import type { FixedSpeedOption } from "./app/app";
 import type { ButtonsDef } from "./app/inputBindings";
 import type { Asset } from "./assets/asset";
 import type { ShaderData, Uniform } from "./assets/shader";
+import type { SpriteData } from "./assets/sprite";
 import type { KAPLAYCtx } from "./core/contextType";
 import type { TypesOpt } from "./core/taf";
 import type { GameObjRaw } from "./ecs/entity/GameObjRaw";
@@ -800,7 +801,39 @@ export interface RenderProps {
     outline?: Outline;
 }
 
-export interface Outline {
+/**
+ * A sprite source used to texture rendered geometry.
+ *
+ * @group Rendering
+ */
+export type TextureSource = string | SpriteData | Asset<SpriteData>;
+
+/**
+ * Texture options shared by vector drawing APIs.
+ *
+ * @group Rendering
+ */
+export interface TextureProps {
+    /**
+     * The sprite used to texture the geometry.
+     */
+    texture?: TextureSource;
+    /**
+     * The sprite frame to use.
+     */
+    frame?: number;
+}
+
+export type TextureMapping = "bounds" | "path";
+
+export interface StrokeTextureProps extends TextureProps {
+    /**
+     * How the texture is mapped onto stroke geometry.
+     */
+    textureMapping?: TextureMapping;
+}
+
+export interface Outline extends StrokeTextureProps {
     /**
      * The width, or thickness of the line.
      */

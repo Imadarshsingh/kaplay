@@ -3,8 +3,14 @@ import { lerp } from "../../math/lerp";
 import { deg2rad, vec2 } from "../../math/math";
 import { Vec2 } from "../../math/Vec2";
 import { _k } from "../../shared";
-import type { RenderProps } from "../../types";
+import type { RenderProps, StrokeTextureProps } from "../../types";
+import type { Texture } from "../gfx";
 import { drawRaw } from "./drawRaw";
+import {
+    mapTextureToBounds,
+    mapTextureToPath,
+    resolveTexture,
+} from "./textureMapping";
 
 /**
  * How the line should look like.
@@ -12,20 +18,56 @@ import { drawRaw } from "./drawRaw";
  * @group Draw
  * @subgroup Types
  */
-export type DrawLineOpt = Omit<RenderProps, "angle" | "scale"> & {
-    /**
-     * Starting point of the line.
-     */
-    p1: Vec2;
-    /**
-     * Ending point of the line.
-     */
-    p2: Vec2;
-    /**
-     * The width, or thickness of the line,
-     */
-    width?: number;
-};
+export type DrawLineOpt =
+    & Omit<RenderProps, "angle" | "scale">
+    & StrokeTextureProps
+    & {
+        /**
+         * Starting point of the line.
+         */
+        p1: Vec2;
+        /**
+         * Ending point of the line.
+         */
+        p2: Vec2;
+        /**
+         * The width, or thickness of the line,
+         */
+        width?: number;
+    };
+
+function lineTexture(
+    pos: number[],
+    opt: StrokeTextureProps & { width?: number; bias?: number },
+    pts?: Vec2[],
+    closed: boolean = false,
+): { uv: number[]; tex: Texture } | null {
+    if (!opt.texture) {
+        return {
+            uv: new Array<number>(pos.length).fill(1),
+            tex: _k.gfx.whitePixel.tex,
+        };
+    }
+
+    const texture = resolveTexture(opt.texture, opt.frame);
+    if (!texture) {
+        return null;
+    }
+
+    return {
+        uv: opt.textureMapping === "path" && pts
+            ? mapTextureToPath(
+                pos,
+                pts,
+                opt.width ?? 1,
+                opt.bias ?? 0,
+                texture.quad,
+                closed,
+            )
+            : mapTextureToBounds(pos, texture.quad),
+        tex: texture.tex,
+    };
+}
 
 export function drawLine(opt: DrawLineOpt) {
     const { p1, p2 } = opt;
@@ -57,27 +99,22 @@ export function drawLine(opt: DrawLineOpt) {
     const color = opt.color ?? Color.WHITE;
     const opacity = opt.opacity ?? 1;
 
+    const pos = [
+        p1.x - dis.x,
+        p1.y - dis.y,
+        p1.x + dis.x,
+        p1.y + dis.y,
+        p2.x + dis.x,
+        p2.y + dis.y,
+        p2.x - dis.x,
+        p2.y - dis.y,
+    ];
+    const texture = lineTexture(pos, opt, [p1, p2]);
+    if (!texture) return;
+
     const attributes = {
-        pos: [
-            p1.x - dis.x,
-            p1.y - dis.y,
-            p1.x + dis.x,
-            p1.y + dis.y,
-            p2.x + dis.x,
-            p2.y + dis.y,
-            p2.x - dis.x,
-            p2.y - dis.y,
-        ],
-        uv: [
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-        ],
+        pos,
+        uv: texture.uv,
         color: [
             color.r,
             color.g,
@@ -104,7 +141,7 @@ export function drawLine(opt: DrawLineOpt) {
         attributes,
         [0, 1, 3, 1, 2, 3],
         opt.fixed,
-        _k.gfx.whitePixel.tex,
+        texture.tex,
         opt.shader,
         opt.uniform ?? undefined,
     );
@@ -124,36 +161,39 @@ export type LineCap =
 /**
  * How the lines should look like.
  */
-export type DrawLinesOpt = Omit<RenderProps, "angle" | "scale"> & {
-    /**
-     * The points that should be connected with a line.
-     */
-    pts: Vec2[];
-    /**
-     * The width, or thickness of the lines,
-     */
-    width?: number;
-    /**
-     * The radius of each corner.
-     */
-    radius?: number | number[];
-    /**
-     * Line join style (default "none").
-     */
-    join?: LineJoin;
-    /**
-     * Line cap style (default "none").
-     */
-    cap?: LineCap;
-    /**
-     * Line bias, the position of the line relative to its center (default 0).
-     */
-    bias?: number;
-    /**
-     * Maximum miter length, anything longer becomes bevel.
-     */
-    miterLimit?: number;
-};
+export type DrawLinesOpt =
+    & Omit<RenderProps, "angle" | "scale">
+    & StrokeTextureProps
+    & {
+        /**
+         * The points that should be connected with a line.
+         */
+        pts: Vec2[];
+        /**
+         * The width, or thickness of the lines,
+         */
+        width?: number;
+        /**
+         * The radius of each corner.
+         */
+        radius?: number | number[];
+        /**
+         * Line join style (default "none").
+         */
+        join?: LineJoin;
+        /**
+         * Line cap style (default "none").
+         */
+        cap?: LineCap;
+        /**
+         * Line bias, the position of the line relative to its center (default 0).
+         */
+        bias?: number;
+        /**
+         * Maximum miter length, anything longer becomes bevel.
+         */
+        miterLimit?: number;
+    };
 
 export function _drawLinesBevel(opt: DrawLinesOpt) {
     const pts = opt.pts;
@@ -302,6 +342,10 @@ export function _drawLinesBevel(opt: DrawLinesOpt) {
         }
     }
 
+    if (isLoop && opt.textureMapping === "path") {
+        vertices.push(vertices[0], vertices[1]);
+    }
+
     if (vertices.length < 4) return;
 
     const indices = [];
@@ -315,7 +359,7 @@ export function _drawLinesBevel(opt: DrawLinesOpt) {
         indices[index++] = i + 1;
     }
 
-    if (isLoop) {
+    if (isLoop && opt.textureMapping !== "path") {
         indices[index++] = vertices.length - 1;
         indices[index++] = vertices.length - 2;
         indices[index++] = 0;
@@ -333,7 +377,7 @@ export function _drawLinesBevel(opt: DrawLinesOpt) {
 
     const attributes = {
         pos: new Array<number>(vertices.length * 2),
-        uv: new Array<number>(vertices.length * 2).fill(1),
+        uv: new Array<number>(vertices.length * 2),
         color: new Array<number>(vertices.length * 3).fill(255),
         opacity: new Array<number>(vertices.length).fill(opt.opacity ?? 1),
     };
@@ -348,11 +392,20 @@ export function _drawLinesBevel(opt: DrawLinesOpt) {
         }
     }
 
+    const texture = lineTexture(
+        attributes.pos,
+        opt,
+        pts.map(pt => pt.add(offset)),
+        isLoop,
+    );
+    if (!texture) return;
+    attributes.uv = texture.uv;
+
     drawRaw(
         attributes,
         indices,
         opt.fixed,
-        _k.gfx.whitePixel.tex,
+        texture.tex,
         opt.shader,
         opt.uniform ?? undefined,
     );
@@ -526,6 +579,10 @@ export function _drawLinesRound(opt: DrawLinesOpt) {
         }
     }
 
+    if (isLoop && opt.textureMapping === "path") {
+        vertices.push(vertices[0], vertices[1]);
+    }
+
     if (vertices.length < 4) return;
 
     const indices = [];
@@ -539,7 +596,7 @@ export function _drawLinesRound(opt: DrawLinesOpt) {
         indices[index++] = i + 1;
     }
 
-    if (isLoop) {
+    if (isLoop && opt.textureMapping !== "path") {
         indices[index++] = vertices.length - 1;
         indices[index++] = vertices.length - 2;
         indices[index++] = 0;
@@ -550,7 +607,7 @@ export function _drawLinesRound(opt: DrawLinesOpt) {
 
     const attributes = {
         pos: new Array<number>(vertices.length * 2),
-        uv: new Array<number>(vertices.length * 2).fill(1),
+        uv: new Array<number>(vertices.length * 2),
         color: new Array<number>(vertices.length * 3).fill(255),
         opacity: new Array<number>(vertices.length).fill(opt.opacity ?? 1),
     };
@@ -565,11 +622,20 @@ export function _drawLinesRound(opt: DrawLinesOpt) {
         }
     }
 
+    const texture = lineTexture(
+        attributes.pos,
+        opt,
+        pts.map(pt => pt.add(offset)),
+        isLoop,
+    );
+    if (!texture) return;
+    attributes.uv = texture.uv;
+
     drawRaw(
         attributes,
         indices,
         opt.fixed,
-        _k.gfx.whitePixel.tex,
+        texture.tex,
         opt.shader,
         opt.uniform ?? undefined,
     );
@@ -708,6 +774,10 @@ export function _drawLinesMiter(opt: DrawLinesOpt) {
         }
     }
 
+    if (isLoop && opt.textureMapping === "path") {
+        vertices.push(vertices[0], vertices[1]);
+    }
+
     if (vertices.length < 4) return;
 
     const indices = [];
@@ -721,7 +791,7 @@ export function _drawLinesMiter(opt: DrawLinesOpt) {
         indices[index++] = i + 1;
     }
 
-    if (isLoop) {
+    if (isLoop && opt.textureMapping !== "path") {
         indices[index++] = vertices.length - 1;
         indices[index++] = vertices.length - 2;
         indices[index++] = 0;
@@ -732,7 +802,7 @@ export function _drawLinesMiter(opt: DrawLinesOpt) {
 
     const attributes = {
         pos: new Array<number>(vertices.length * 2),
-        uv: new Array<number>(vertices.length * 2).fill(1),
+        uv: new Array<number>(vertices.length * 2),
         color: new Array<number>(vertices.length * 3).fill(255),
         opacity: new Array<number>(vertices.length).fill(opt.opacity ?? 1),
     };
@@ -747,11 +817,20 @@ export function _drawLinesMiter(opt: DrawLinesOpt) {
         }
     }
 
+    const texture = lineTexture(
+        attributes.pos,
+        opt,
+        pts.map(pt => pt.add(offset)),
+        isLoop,
+    );
+    if (!texture) return;
+    attributes.uv = texture.uv;
+
     drawRaw(
         attributes,
         indices,
         opt.fixed,
-        _k.gfx.whitePixel.tex,
+        texture.tex,
         opt.shader,
         opt.uniform ?? undefined,
     );
