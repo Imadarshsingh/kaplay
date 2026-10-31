@@ -1,19 +1,30 @@
 import { KEvent } from "../events/events";
 import { clamp } from "../math/clamp";
 import { _k } from "../shared";
+import {
+    registerAudioChannelPlayback,
+    resolveAudioDestination,
+} from "./channel";
 import type { AudioPlay, AudioPlayOpt } from "./play";
 
 export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
     const onEndEvents = new KEvent();
     const el = new Audio(url);
+    let playPaused = opt.paused ?? false;
+    let channelPaused = false;
+    let paused = playPaused;
+    let completed = false;
     el.crossOrigin = "anonymous";
     el.loop = Boolean(opt.loop);
     el.volume = opt.volume ?? 1;
     el.playbackRate = opt.speed ?? 1;
+    if (opt.seek !== undefined) {
+        el.currentTime = opt.seek;
+    }
 
     const src = _k.audio.ctx.createMediaElementSource(el);
 
-    src.connect(opt.connectTo ?? _k.audio.masterNode);
+    src.connect(resolveAudioDestination(opt.channel, opt.connectTo));
 
     function resumeAudioCtx() {
         if (_k.debug.paused) return;
@@ -21,20 +32,47 @@ export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
         _k.audio.ctx.resume();
     }
 
-    function play() {
+    function playElement() {
         resumeAudioCtx();
         el.play();
     }
 
-    if (!opt.paused) {
-        play();
+    function syncPaused() {
+        const nextPaused = playPaused || channelPaused;
+        if (paused === nextPaused) return;
+
+        paused = nextPaused;
+        if (paused) {
+            el.pause();
+        }
+        else {
+            playElement();
+        }
     }
 
-    el.onended = () => onEndEvents.trigger();
+    el.onended = () => {
+        completed = true;
+        playPaused = true;
+        paused = true;
+        onEndEvents.trigger();
+    };
 
-    return {
-        play() {
-            play();
+    const playback: AudioPlay = {
+        play(time?: number) {
+            if (time !== undefined) {
+                el.currentTime = time;
+            }
+            else if (completed) {
+                el.currentTime = 0;
+            }
+            completed = false;
+            playPaused = false;
+            if (paused) {
+                syncPaused();
+            }
+            else {
+                playElement();
+            }
         },
 
         seek(time: number) {
@@ -42,7 +80,9 @@ export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
         },
 
         stop() {
-            el.pause();
+            completed = false;
+            playPaused = true;
+            syncPaused();
             this.seek(0);
         },
 
@@ -55,16 +95,12 @@ export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
         },
 
         set paused(p: boolean) {
-            if (p) {
-                el.pause();
-            }
-            else {
-                play();
-            }
+            playPaused = p;
+            syncPaused();
         },
 
         get paused() {
-            return el.paused;
+            return paused;
         },
 
         time() {
@@ -112,6 +148,26 @@ export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
         connect(node?: AudioNode) {
             src.disconnect();
             src.connect(node ?? _k.audio.masterNode);
+            detachChannel();
+            detachChannel = () => {};
+            channelPaused = false;
+            syncPaused();
         },
     };
+
+    let detachChannel = registerAudioChannelPlayback(opt.channel, {
+        setChannelPaused(value) {
+            channelPaused = value;
+            syncPaused();
+        },
+        stopFromChannel() {
+            playback.stop();
+        },
+    });
+
+    if (!paused) {
+        playElement();
+    }
+
+    return playback;
 }

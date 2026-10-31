@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": []
+  },
+  "files": [
+    "../src/.env.d.ts",
+    "./audioChannelTypes_7f31c2.ts"
+  ]
+}

@@ -16,6 +16,7 @@ import type {
     SpriteData,
 } from "../assets/sprite";
 import type { SpriteAtlasData } from "../assets/spriteAtlas";
+import type { AudioChannel, AudioChannelOpt } from "../audio/channel";
 import type { AudioPlay, AudioPlayOpt } from "../audio/play";
 import type { Debug } from "../debug/debug";
 import type { Recording } from "../debug/record";
@@ -4856,6 +4857,16 @@ export interface KAPLAYCtx {
         maxLoops?: number,
         waitFirst?: boolean,
     ): TimerController;
+    /**
+     * Create an audio channel for controlling the volume and mute state of
+     * multiple sounds together.
+     *
+     * @param options - The initial channel settings.
+     *
+     * @returns An audio channel.
+     * @group Audio
+     */
+    createAudioChannel(options?: AudioChannelOpt): AudioChannel;
     /**
      * Play a piece of audio.
      *

@@ -3,6 +3,11 @@ import { resolveSound, type SoundData } from "../assets/sound";
 import { KEvent, type KEventController } from "../events/events";
 import { _k } from "../shared";
 import type { MusicData } from "../types";
+import {
+    type AudioChannel,
+    registerAudioChannelPlayback,
+    resolveAudioDestination,
+} from "./channel";
 import { playMusic } from "./playMusic";
 
 // TODO: enable setting on load, make part of SoundData
@@ -63,6 +68,10 @@ export interface AudioPlayOpt {
      * KAPLAY's default volume node. Defaults to undefined, i.e. use KAPLAY's volume node.
      */
     connectTo?: AudioNode;
+    /**
+     * A shared volume and mute control for this playback.
+     */
+    channel?: AudioChannel;
 }
 
 /**
@@ -161,31 +170,24 @@ export function play(
     }
 
     const ctx = _k.audio.ctx;
-    let paused = opt.paused ?? false;
+    let playPaused = opt.paused ?? false;
+    let channelPaused = false;
+    let paused = playPaused;
     let srcNode = ctx.createBufferSource();
     const onEndEvents = new KEvent();
     const gainNode = ctx.createGain();
     const panNode = ctx.createStereoPanner();
-    const pos = opt.seek ?? 0;
-    let startTime = 0;
-    let stopTime = 0;
+    let position = opt.seek ?? 0;
+    let positionTime = ctx.currentTime;
     let started = false;
 
     srcNode.loop = Boolean(opt.loop);
     srcNode.detune.value = opt.detune ?? 0;
     srcNode.playbackRate.value = opt.speed ?? 1;
     srcNode.connect(panNode);
-    srcNode.onended = () => {
-        if (
-            getTime()
-                >= (srcNode.buffer?.duration ?? Number.POSITIVE_INFINITY)
-        ) {
-            onEndEvents.trigger();
-        }
-    };
     panNode.pan.value = opt.pan ?? 0;
     panNode.connect(gainNode);
-    gainNode.connect(opt.connectTo ?? _k.audio.masterNode);
+    gainNode.connect(resolveAudioDestination(opt.channel, opt.connectTo));
     gainNode.gain.value = opt.volume ?? 1;
 
     const start = (data: SoundData) => {
@@ -211,29 +213,52 @@ export function play(
         else srcNode.buffer = data.buf;
 
         if (!paused) {
-            startTime = ctx.currentTime;
-            srcNode.start(0, pos);
+            positionTime = ctx.currentTime;
+            srcNode.start(0, position);
             started = true;
         }
     };
 
-    const snd = resolveSound(
-        // @ts-expect-error Resolve Type Error
-        src,
-    );
-
-    if (snd instanceof Asset) {
-        snd.onLoad(start);
-    }
+    const effectiveRate = () => {
+        return Math.max(
+            0,
+            srcNode.playbackRate.value
+                * Math.pow(2, srcNode.detune.value / 1200),
+        );
+    };
 
     const getTime = () => {
-        if (!srcNode.buffer) return 0;
-        const t = paused
-            ? stopTime - startTime
-            : ctx.currentTime - startTime;
+        if (!srcNode.buffer) return position;
+        const t = position + (started && !paused
+            ? (ctx.currentTime - positionTime) * effectiveRate()
+            : 0);
         const d = srcNode.buffer.duration;
         return srcNode.loop ? t % d : Math.min(t, d);
     };
+
+    const capturePosition = () => {
+        position = getTime();
+        positionTime = ctx.currentTime;
+    };
+
+    const setOnEnded = (node: AudioBufferSourceNode) => {
+        node.onended = () => {
+            if (node !== srcNode || !started) return;
+            if (
+                getTime()
+                    < (node.buffer?.duration ?? Number.POSITIVE_INFINITY)
+            ) return;
+
+            started = false;
+            playPaused = true;
+            paused = true;
+            position = node.buffer?.duration ?? position;
+            positionTime = ctx.currentTime;
+            onEndEvents.trigger();
+        };
+    };
+
+    setOnEnded(srcNode);
 
     const cloneNode = (oldNode: AudioBufferSourceNode) => {
         const newNode = ctx.createBufferSource();
@@ -241,35 +266,44 @@ export function play(
         newNode.loop = oldNode.loop;
         newNode.playbackRate.value = oldNode.playbackRate.value;
         newNode.detune.value = oldNode.detune.value;
-        newNode.onended = oldNode.onended;
+        setOnEnded(newNode);
         newNode.connect(panNode);
         return newNode;
     };
 
-    return {
+    const syncPaused = () => {
+        const nextPaused = playPaused || channelPaused;
+        if (paused === nextPaused) return;
+
+        if (nextPaused) {
+            capturePosition();
+            paused = true;
+            if (started) {
+                srcNode.stop();
+                started = false;
+            }
+        }
+        else {
+            paused = false;
+            if (srcNode.buffer) {
+                srcNode = cloneNode(srcNode);
+                srcNode.start(0, position);
+                started = true;
+                positionTime = ctx.currentTime;
+            }
+        }
+    };
+
+    const playback: AudioPlay = {
         stop() {
-            this.paused = true;
+            playPaused = true;
+            syncPaused();
             this.seek(0);
         },
 
         set paused(p: boolean) {
-            if (paused === p) return;
-            paused = p;
-            if (p) {
-                if (started) {
-                    srcNode.stop();
-                    started = false;
-                }
-                stopTime = ctx.currentTime;
-            }
-            else {
-                srcNode = cloneNode(srcNode);
-                const pos = stopTime - startTime;
-                srcNode.start(0, pos);
-                started = true;
-                startTime = ctx.currentTime - pos;
-                stopTime = 0;
-            }
+            playPaused = p;
+            syncPaused();
         },
 
         get paused() {
@@ -278,28 +312,32 @@ export function play(
 
         play(time: number = 0) {
             this.seek(time);
-            this.paused = false;
+            playPaused = false;
+            syncPaused();
         },
 
         seek(time: number) {
-            if (!srcNode.buffer?.duration) return;
+            if (!srcNode.buffer?.duration) {
+                position = time;
+                positionTime = ctx.currentTime;
+                return;
+            }
             if (time > srcNode.buffer.duration) return;
+            position = time;
+            positionTime = ctx.currentTime;
             if (paused) {
                 srcNode = cloneNode(srcNode);
-                startTime = stopTime - time;
             }
             else {
                 srcNode.stop();
                 srcNode = cloneNode(srcNode);
-                startTime = ctx.currentTime - time;
                 srcNode.start(0, time);
                 started = true;
-                stopTime = 0;
             }
         },
 
-        // TODO: affect time()
         set speed(val: number) {
+            capturePosition();
             srcNode.playbackRate.value = val;
         },
 
@@ -308,6 +346,7 @@ export function play(
         },
 
         set detune(val: number) {
+            capturePosition();
             srcNode.detune.value = val;
         },
 
@@ -358,6 +397,31 @@ export function play(
         connect(node?: AudioNode) {
             gainNode.disconnect();
             gainNode.connect(node ?? _k.audio.masterNode);
+            detachChannel();
+            detachChannel = () => {};
+            channelPaused = false;
+            syncPaused();
         },
     };
+
+    let detachChannel = registerAudioChannelPlayback(opt.channel, {
+        setChannelPaused(value) {
+            channelPaused = value;
+            syncPaused();
+        },
+        stopFromChannel() {
+            playback.stop();
+        },
+    });
+
+    const snd = resolveSound(
+        // @ts-expect-error Resolve Type Error
+        src,
+    );
+
+    if (snd instanceof Asset) {
+        snd.onLoad(start);
+    }
+
+    return playback;
 }
